@@ -1466,32 +1466,40 @@ Section RelationProperties.
 
 Variable T : Type.
 
-Variable R : rel T.
+Section Def.
+
+Variables (R : rel T) (P : T -> T -> Prop).
 
 Definition total := forall x y, R x y || R y x.
-Definition transitive := forall y x z, R x y -> R y z -> R x z.
+Definition transitive := forall y x z, P x y -> P y z -> P x z.
 
 Definition symmetric := forall x y, R x y = R y x.
 Definition antisymmetric := forall x y, R x y && R y x -> x = y.
-Definition pre_symmetric := forall x y, R x y -> R y x.
+Definition pre_symmetric := forall x y, P x y -> P y x.
 
-Lemma symmetric_from_pre : pre_symmetric -> symmetric.
-Proof. by move=> symR x y; apply/idP/idP; apply: symR. Qed.
-
-Definition reflexive := forall x, R x x.
+Definition reflexive := forall x, P x x.
 Definition irreflexive := forall x, R x x = false.
 
 Definition left_transitive := forall x y, R x y -> R x =1 R y.
 Definition right_transitive := forall x y, R x y -> R^~ x =1 R^~ y.
 
+End Def.
+
+Section BoolProp.
+
+Variable (R : rel T).
+
+Lemma symmetric_from_pre : pre_symmetric R -> symmetric R.
+Proof. by move=> symR x y; apply/idP/idP; apply: symR. Qed.
+
 Section PER.
 
-Hypotheses (symR : symmetric) (trR : transitive).
+Hypotheses (symR : symmetric R) (trR : transitive R).
 
-Lemma sym_left_transitive : left_transitive.
+Lemma sym_left_transitive : left_transitive R.
 Proof. by move=> x y Rxy z; apply/idP/idP; apply: trR; rewrite // symR. Qed.
 
-Lemma sym_right_transitive : right_transitive.
+Lemma sym_right_transitive : right_transitive R.
 Proof. by move=> x y /sym_left_transitive Rxy z; rewrite !(symR z) Rxy. Qed.
 
 End PER.
@@ -1501,11 +1509,13 @@ End PER.
 
 Definition equivalence_rel := forall x y z, R z z * (R x y -> R x z = R y z).
 
-Lemma equivalence_relP : equivalence_rel <-> reflexive /\ left_transitive.
+Lemma equivalence_relP : equivalence_rel <-> reflexive R /\ left_transitive R.
 Proof.
 split=> [eqiR | [Rxx trR] x y z]; last by split=> [|/trR->].
 by split=> [x | x y Rxy z]; [rewrite (eqiR x x x) | rewrite (eqiR x y z)].
 Qed.
+
+End BoolProp.
 
 End RelationProperties.
 
