@@ -657,7 +657,7 @@ let is_unification_pattern_meta env evd nb m l t =
 
 let is_unification_pattern_evar env evd (evk,args) l t =
   match Option.List.map (fun c -> to_alias evd c) l with
-  | Some l when noccur_evar env evd evk t ->
+  | Some l ->
     let args = Evd.expand_existential evd (evk, args) in
     let args = remove_instance_local_defs evd evk args in
     let args = Option.List.map (fun c -> to_alias evd c) args in

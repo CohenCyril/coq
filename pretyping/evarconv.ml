@@ -356,7 +356,9 @@ let check_conv_record env sigma ((proji, u), (params1, c1, extra_args1)) (t2,sk2
       end
     with | Not_found -> (* If we find no solution, we ask the hook if it has any. *)
       match (apply_hooks env sigma ((proji, u), params1, c1) (t2, args2)) with
-      | Some r -> r, args2' @ args2
+      | Some r ->
+          let () = debug_unification (fun () -> Pp.(v 0 (str "cs hook found a solution: " ++ Termops.Internal.print_constr_env env sigma (snd r).constant ++ cut ()))) in
+          r, args2' @ args2
       | None -> raise Not_found
   in
   let t2 = Stack.zip sigma (h2, (Stack.append_app_list args2 Stack.empty)) in
@@ -507,6 +509,9 @@ let compare_heads pbty env evd ~nargs term term' =
           else compare_constructor_instances evd u u'
       end
   | Construct _, Construct _ -> UnifFailure (evd, NotSameHead)
+  | Int i, Int j -> if i = j then Success evd else UnifFailure (evd, NotSameHead)
+  | Float i, Float j -> if i = j then Success evd else UnifFailure (evd, NotSameHead)
+  | String i, String j -> if i = j then Success evd else UnifFailure (evd, NotSameHead)
   | _, _ -> anomaly (Pp.str "")
 
 (* This function tries to unify 2 stacks element by element. It works
@@ -629,26 +634,6 @@ let conv_fun f flags on_types =
     | TypeUnification -> typefn
     | TermUnification -> termfn
 
-let infer_conv_noticing_evars ~pb ~ts env sigma t1 t2 =
-  let has_evar = ref false in
-  let evar_expand ev =
-    let v = existential_expand_value0 sigma ev in
-    let () = match v with
-    | CClosure.EvarUndefined _ -> has_evar := true
-    | CClosure.EvarDefined _ -> ()
-    in
-    v
-  in
-  let evar_handler = { (Evd.evar_handler sigma) with evar_expand } in
-  let conv = { genconv = fun pb ~l2r sigma -> Conversion.generic_conv pb ~l2r ~evars:evar_handler } in
-  match infer_conv_gen conv ~catch_incon:false ~pb ~ts env sigma t1 t2 with
-  | Some sigma -> Some (Success sigma)
-  | None ->
-    if !has_evar then None
-    else Some (UnifFailure (sigma, ConversionFailed (env,t1,t2)))
-  | exception UGraph.UniverseInconsistency e ->
-    if !has_evar then None
-    else Some (UnifFailure (sigma, UnifUnivInconsistency e))
 
 let rec evar_conv_x flags env evd pbty term1 term2 =
   let t = Random.int 1073741823 in
@@ -656,17 +641,7 @@ let rec evar_conv_x flags env evd pbty term1 term2 =
   let term1 = whd_head_evar evd term1 in
   let term2 = whd_head_evar evd term2 in
   let () = debug_unification (fun () -> Pp.(v 0 (str "evar_conv_x after whd_head_evar " ++ int t ++ cut () ++ Termops.Internal.print_constr_env env evd term1 ++ cut () ++ Termops.Internal.print_constr_env env evd term2 ++ cut ()))) in
-  (* Maybe convertible but since reducing can erase evars which [evar_apprec]
-     could have found, we do it only if the terms are free of evar.
-     Note: incomplete heuristic... *)
-  let ground_test =
-    if is_ground_term evd term1 && is_ground_term evd term2 then
-      infer_conv_noticing_evars ~pb:pbty ~ts:flags.closed_ts env evd term1 term2
-    else None
-  in
-  let r = match ground_test with
-    | Some result -> result
-    | None ->
+  let r =
       (* Until pattern-unification is used consistently, use nohdbeta to not
            destroy beta-redexes that can be used for 1st-order unification *)
         let term1 = apprec_nohdbeta flags env evd term1 in
@@ -1116,6 +1091,14 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
         ise_try evd [f1; f2]
 
 
+        | _, Lambda _ when sk2 <> [] && not (EConstr.isLambda evd term1) ->
+            evar_eqappr_x flags env evd pbty keys None appr1
+              (whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd appr2)
+        | Lambda _, _ when sk1 <> [] && not (EConstr.isLambda evd term2) ->
+            evar_eqappr_x flags env evd pbty keys None
+              (whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd appr1)
+              appr2
+
         | _, _ ->
         let p1 = match get_proj_case appr1 with Proj.CS _ when lastUnfolded = Some true -> Proj.None | p -> p in
         let p2 = match get_proj_case appr2 with Proj.CS _ when lastUnfolded = Some false -> Proj.None | p -> p in
@@ -1304,13 +1287,19 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
               exact_ise_stack2 env evd (evar_conv_x flags) sk1 sk2
             else UnifFailure (evd,NotSameHead)
 
+        | Array (_, i, defi, ti), Array (_, j, defj, tj) ->
+          ise_and evd [
+            (fun evd -> ise_array2 evd (fun evd -> evar_conv_x flags env evd pbty) i j);
+            (fun evd -> evar_conv_x flags env evd pbty defi defj);
+            (fun evd -> evar_conv_x flags env evd pbty ti tj)
+          ]
+
         | Const _, Const _
         | Ind _, Ind _
         | Construct _, Construct _
         | Int _, Int _
         | Float _, Float _
-        | String _, String _
-        | Array _, Array _ ->
+        | String _, String _ ->
           rigids env evd sk1 term1 sk2 term2
 
         | Evar (sp1,al1), Evar (sp2,al2) -> (* Frozen evars *)
@@ -1479,31 +1468,53 @@ and conv_record flags env (evd,(h,h2),c,bs,(params,params1),(us,us2),(sk1,sk2),c
 and eta_constructor flags env evd ((ind, i), u) sk1 (term2,sk2) =
   (* reduces an equation <Construct(ind,i)|sk1> == <term2|sk2> to the
      equations [arg_i = Proj_i (sk2[term2])] where [sk1] is [params args] *)
+  let () = debug_unification (fun () -> Pp.(v 0 (str "eta_constructor" ++ cut ()))) in
   let open Declarations in
   let mib = lookup_mind (fst ind) env in
+  if mib.mind_finite <> BiFinite then
+    let () = debug_unification (fun () -> Pp.(v 0 (str "mib not BiFinite" ++ cut ()))) in
+    UnifFailure (evd,NotSameHead) else
+  match Stack.list_of_app_stack sk1 with
+  | None ->
+    let () = debug_unification (fun () -> Pp.(v 0 (str "sk1 not applicative" ++ cut ()))) in
+    UnifFailure (evd,NotSameHead)
+  | Some l1 -> begin
     match get_projections env ind with
-    | Some projs when mib.mind_finite == BiFinite ->
+    | Some projs ->
+      let () = debug_unification (fun () -> Pp.(v 0 (str "got primitive projections" ++ cut ()))) in
       let pars = mib.mind_nparams in
-      begin match Stack.list_of_app_stack sk1 with
-      | None -> UnifFailure (evd,NotSameHead)
-      | Some l1 ->
-        (try
-           let l1' = List.skipn pars l1 in
-           let l2' =
-             let term = Stack.zip evd (term2,sk2) in
-             List.map (fun (p,r) ->
-                 let r = EConstr.Vars.subst_instance_relevance u (ERelevance.make r) in
-                 EConstr.mkProj (Projection.make p false, r, term))
-               (Array.to_list projs)
-           in
-          let f i t1 t2 = evar_conv_x { flags with with_cs = false } env i CONV t1 t2 in
-          ise_list2 evd f l1' l2'
-         with
-         | Failure _ ->
-           (* List.skipn: partially applied constructor *)
-           UnifFailure(evd,NotSameHead))
-      end
-    | _ -> UnifFailure (evd,NotSameHead)
+      (try
+         let l1' = List.skipn pars l1 in
+         let l2' =
+           let term = Stack.zip evd (term2,sk2) in
+           List.map (fun (p,r) ->
+               let r = EConstr.Vars.subst_instance_relevance u (ERelevance.make r) in
+               EConstr.mkProj (Projection.make p false, r, term))
+             (Array.to_list projs)
+         in
+        let f i t1 t2 = evar_conv_x { flags with with_cs = false } env i CONV t1 t2 in
+        ise_list2 evd f l1' l2'
+       with
+       | Failure _ ->
+         (* List.skipn: partially applied constructor *)
+         UnifFailure(evd,NotSameHead))
+    | None -> Structures.Structure.(try
+        let () = debug_unification (fun () -> Pp.(v 0 (str "no primitive projections" ++ cut ()))) in
+        let s = find ind in
+        let () = debug_unification (fun () -> Pp.(v 0 (str "found structure" ++ cut ()))) in
+        let l1' = List.skipn s.nparams l1 in
+        let l2' =
+          let term = Stack.zip evd (term2,sk2) in
+          List.map (fun p ->
+            match p.proj_body with
+            | None -> raise Not_found
+            | Some p -> EConstr.mkApp ((EConstr.mkConstU (p, u)), [|term|]))
+            s.projections in
+        let f i t1 t2 = evar_conv_x { flags with with_cs = false } env i CONV t1 t2 in
+        ise_list2 evd f l1' l2'
+       with
+       | _ -> UnifFailure(evd,NotSameHead))
+  end
 
 let evar_conv_x flags env evd pbty term1 term2 =
   (*debug_unification Pp.(fun () ->
