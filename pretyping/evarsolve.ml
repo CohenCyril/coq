@@ -906,6 +906,7 @@ let check_evar_instance_evi unify flags env evd evi body =
   let evenv = evar_env env evi in
   (* FIXME: The body might be ill-typed when this is called from w_merge *)
   (* This happens in practice, cf MathClasses build failure on 2013-3-15 *)
+  let () = debug_evarsolve (fun () -> Pp.(v 0 (str "check_evar_instance get type of " ++ Termops.Internal.print_constr_env env evd body ++ cut ()))) in
   match Retyping.get_type_of ~lax:true evenv evd body
   with
   | exception Retyping.RetypeError _ ->
@@ -913,6 +914,7 @@ let check_evar_instance_evi unify flags env evd evi body =
     let () = debug_evarsolve (fun () -> Pp.(v 0 (str "check_evar_instance typing error" ++ cut ()))) in
     Loc.raise ?loc (IllTypedInstance (evenv,evd,None, Evd.evar_concl evi))
   | ty ->
+    let () = debug_evarsolve (fun () -> Pp.(v 0 (str "check_evar_instance type is " ++ Termops.Internal.print_constr_env env evd ty ++ cut ()))) in
     match unify flags TypeUnification evenv evd Conversion.CUMUL ty (Evd.evar_concl evi) with
     | Success evd -> evd
     | UnifFailure _ -> raise (IllTypedInstance (evenv,evd,Some ty, Evd.evar_concl evi))
