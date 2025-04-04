@@ -270,7 +270,7 @@ let activate_hook ~name =
 let apply_hooks env sigma proj pat =
   List.find_map (fun name ->
     try CString.Map.get name !all_hooks env sigma proj pat
-    with e when CErrors.noncritical e -> anomaly Pp.(str "CS hook " ++ str name ++ str " exploded")) !active_hooks
+    with e when CErrors.noncritical e -> raise Not_found) !active_hooks
 
 let decompose_proj ?metas env sigma (t1, sk1) =
    (* I only recognize ConstRef projections since these are the only ones for which
@@ -640,8 +640,18 @@ let rec evar_conv_x flags env evd pbty term1 term2 =
   let () = debug_unification (fun () -> Pp.(v 0 (str "evar_conv_x: " ++ int t ++ cut () ++ Termops.Internal.print_constr_env env evd term1 ++ cut () ++ Termops.Internal.print_constr_env env evd term2 ++ cut ()))) in
   let term1 = whd_head_evar evd term1 in
   let term2 = whd_head_evar evd term2 in
-  let () = debug_unification (fun () -> Pp.(v 0 (str "evar_conv_x after whd_head_evar " ++ int t ++ cut () ++ Termops.Internal.print_constr_env env evd term1 ++ cut () ++ Termops.Internal.print_constr_env env evd term2 ++ cut ()))) in
+  (* Maybe convertible but since reducing can erase evars which [evar_apprec]
+     could have found, we do it only if the terms are free of evar.
+     Note: incomplete heuristic... *)
+  let ground_test =
+    if is_ground_term evd term1 && is_ground_term evd term2 then
+      infer_conv_noticing_evars ~pb:pbty ~ts:flags.closed_ts env evd term1 term2
+    else None
+  in
   let r =
+    match ground_test with
+    | Some result -> result
+    | None ->
       (* Until pattern-unification is used consistently, use nohdbeta to not
            destroy beta-redexes that can be used for 1st-order unification *)
         let term1 = apprec_nohdbeta flags env evd term1 in
@@ -1089,7 +1099,6 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
           in evar_eqappr_x flags env i pbty hds None out1 out2
         in
         ise_try evd [f1; f2]
-
 
         | _, Lambda _ when sk2 <> [] && not (EConstr.isLambda evd term1) ->
             evar_eqappr_x flags env evd pbty keys None appr1
