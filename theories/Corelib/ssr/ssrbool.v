@@ -1366,7 +1366,7 @@ Module Export PredSortOfSimplCoercion := DeclarePredSortOfSimpl PredOfSimpl.
 Definition predArgType := Type.
 Bind Scope type_scope with predArgType.
 Identity Coercion sort_of_predArgType : predArgType >-> Sortclass.
-Coercion pred_of_argType (T : predArgType) : simpl_pred T := predT.
+Coercion pred_of_argType (T : Type) : simpl_pred T := predT.
 Notation "{ : T }" := (T%type : predArgType) : type_scope.
 
 (** Boolean relations.
