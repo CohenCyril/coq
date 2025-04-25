@@ -357,7 +357,6 @@ let check_conv_record env sigma ((proji, u), (params1, c1, extra_args1)) (t2,sk2
     with | Not_found -> (* If we find no solution, we ask the hook if it has any. *)
       match (apply_hooks env sigma ((proji, u), params1, c1) (t2, args2)) with
       | Some r ->
-          let () = debug_unification (fun () -> Pp.(v 0 (str "cs hook found a solution: " ++ Termops.Internal.print_constr_env env sigma (snd r).constant ++ cut ()))) in
           r, args2' @ args2
       | None -> raise Not_found
   in
@@ -681,7 +680,6 @@ let rec evar_conv_x flags env evd pbty term1 term2 =
                      Miller patterns *)
                 default ()
               | UnifFailure (_, CannotSolveConstraint _) as x ->
-                let () = debug_unification (fun () -> Pp.(v 0 (str "cannot solve constraint" ++ cut ()))) in
                 x
               | x -> x)
           | _, Evar ev when Evd.is_undefined evd (fst ev) && is_evar_allowed flags (fst ev) ->
@@ -694,7 +692,6 @@ let rec evar_conv_x flags env evd pbty term1 term2 =
                      Miller patterns *)
                 default ()
               | UnifFailure (_, CannotSolveConstraint _) as x ->
-                let () = debug_unification (fun () -> Pp.(v 0 (str "cannot solve constraint" ++ cut ()))) in
                 x
               | x -> x)
           | _ -> default ()
@@ -837,7 +834,6 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
         let tM = Stack.zip evd apprM in
           miller_pfenning l2r
             (fun () -> if not_only_app then (* Postpone the use of an heuristic *)
-              let () = debug_unification (fun () -> Pp.(v 0 (str "postpone in miller" ++ cut ()))) in
               switch (fun x y -> Success (Evarutil.add_unification_pb (pbty,env,x,y) i)) (Stack.zip evd apprF) tM
             else quick_fail i)
             ev lF tM i
@@ -954,7 +950,6 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
                          i,mkEvar ev
                        else
                          i,Stack.zip evd apprF in
-                    let () = debug_unification (fun () -> Pp.(v 0 (str "postpone" ++ cut ()))) in
                      switch (fun x y -> Success (Evarutil.add_unification_pb (pbty,env,x,y) i))
                        tF tR
                    else
@@ -1454,22 +1449,16 @@ and conv_record flags env (evd,(h,h2),c,bs,(params,params1),(us,us2),(sk1,sk2),c
     ise_and evd' (
         unif_params @
        [(fun i ->
-        let () = debug_unification (fun () -> Pp.(v 0 (str "us" ++ cut ()))) in
          ise_list2 i
-           (fun i' u1 u -> evar_conv_x flags env i' CONV u1 (substl ks u))
+           (fun i' u1 u ->
+             evar_conv_x flags env i' CONV u1 (substl ks u))
            us2 us);
        (fun i ->
-         let a = app in
-          let () = debug_unification (fun () -> Pp.(v 0 (str "c" ++ cut() ++ Termops.Internal.print_constr_env env i c1 ++ cut () ++ Termops.Internal.print_constr_env env i a ++ cut ()))) in
          evar_conv_x flags env i CONV c1 app);
        (fun i ->
-          let () = debug_unification (fun () -> Pp.(v 0 (str "stacks" ++ cut ()))) in
          exact_ise_stack2 env i (evar_conv_x flags) sk1 sk2);
+       test;
        (fun i ->
-          let () = debug_unification (fun () -> Pp.(v 0 (str "test" ++ cut ()))) in
-         test i);
-       (fun i ->
-          let () = debug_unification (fun () -> Pp.(v 0 (str "h" ++ cut ()))) in
          evar_conv_x flags env i CONV h2
          (fst (decompose_app i (substl ks h))))])
   else UnifFailure(evd,(*dummy*)NotSameHead)
@@ -1477,20 +1466,16 @@ and conv_record flags env (evd,(h,h2),c,bs,(params,params1),(us,us2),(sk1,sk2),c
 and eta_constructor flags env evd ((ind, i), u) sk1 (term2,sk2) =
   (* reduces an equation <Construct(ind,i)|sk1> == <term2|sk2> to the
      equations [arg_i = Proj_i (sk2[term2])] where [sk1] is [params args] *)
-  let () = debug_unification (fun () -> Pp.(v 0 (str "eta_constructor" ++ cut ()))) in
   let open Declarations in
   let mib = lookup_mind (fst ind) env in
   if mib.mind_finite <> BiFinite then
-    let () = debug_unification (fun () -> Pp.(v 0 (str "mib not BiFinite" ++ cut ()))) in
     UnifFailure (evd,NotSameHead) else
   match Stack.list_of_app_stack sk1 with
   | None ->
-    let () = debug_unification (fun () -> Pp.(v 0 (str "sk1 not applicative" ++ cut ()))) in
     UnifFailure (evd,NotSameHead)
   | Some l1 -> begin
     match get_projections env ind with
     | Some projs ->
-      let () = debug_unification (fun () -> Pp.(v 0 (str "got primitive projections" ++ cut ()))) in
       let pars = mib.mind_nparams in
       (try
          let l1' = List.skipn pars l1 in
@@ -1508,9 +1493,7 @@ and eta_constructor flags env evd ((ind, i), u) sk1 (term2,sk2) =
          (* List.skipn: partially applied constructor *)
          UnifFailure(evd,NotSameHead))
     | None -> Structures.Structure.(try
-        let () = debug_unification (fun () -> Pp.(v 0 (str "no primitive projections" ++ cut ()))) in
         let s = find ind in
-        let () = debug_unification (fun () -> Pp.(v 0 (str "found structure" ++ cut ()))) in
         let l1' = List.skipn s.nparams l1 in
         let l2' =
           let term = Stack.zip evd (term2,sk2) in
