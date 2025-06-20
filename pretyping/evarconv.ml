@@ -723,18 +723,25 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
             (position_problem l2r pbty,ev,t2)
   in
   let consume_stack l2r (termF,skF) (termO,skO) evd =
+    let () = debug_unification (fun () -> Pp.(v 0 (str "compare_stack" ++ cut ()))) in
     let switch f a b = if l2r then f a b else f b a in
     let not_only_app = Stack.not_purely_applicative skO in
-    match switch (ise_stack2 not_only_app env evd (evar_conv_x flags)) skF skO with
+    let r = (ise_stack2 not_only_app env evd (evar_conv_x flags)) in
+    let () = debug_unification (fun () -> Pp.(v 0 (str "compared stacks" ++ cut ()))) in
+    match switch r skF skO with
     | Some (l,r), Success i' when l2r && (not_only_app || List.is_empty l) ->
+        let () = debug_unification (fun () -> Pp.(v 0 (str "l2r and not only app" ++ cut ()))) in
         (* E[?n]=E'[redex] reduces to either l[?n]=r[redex] with
            case/fix/proj in E' (why?) or ?n=r[redex] *)
         switch (evar_conv_x flags env i' pbty) (Stack.zip evd (termF,l)) (Stack.zip evd (termO,r))
     | Some (r,l), Success i' when not l2r && (not_only_app || List.is_empty l) ->
+        let () = debug_unification (fun () -> Pp.(v 0 (str "r2l and not only app" ++ cut ()))) in
         (* E'[redex]=E[?n] reduces to either r[redex]=l[?n] with
            case/fix/proj in E' (why?) or r[redex]=?n *)
         switch (evar_conv_x flags env i' pbty) (Stack.zip evd (termF,l)) (Stack.zip evd (termO,r))
-    | None, Success i' -> switch (evar_conv_x flags env i' pbty) termF termO
+    | None, Success i' ->
+        let () = debug_unification (fun () -> Pp.(v 0 (str "stacks are the same" ++ cut ()))) in
+        switch (evar_conv_x flags env i' pbty) termF termO
     | _, (UnifFailure _ as x) -> x
     | Some _, _ -> UnifFailure (evd,NotSameArgSize) in
   let eta_lambda env evd onleft term (term',sk') =
@@ -835,10 +842,14 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
        5.  absorb arguments if purely applicative and postpone *)
     let switch f a b = if l2r then f a b else f b a in
     let eta evd =
+    let () = debug_unification (fun () -> Pp.(v 0 (str "flex_rigid: eta" ++ cut ()))) in
       match EConstr.kind evd termR with
       | Lambda _ when (* if ever problem is ill-typed: *) List.is_empty skR ->
+          let () = debug_unification (fun () -> Pp.(v 0 (str "lambda" ++ cut ()))) in
          eta_lambda env evd false termR apprF
-      | Construct u -> eta_constructor flags env evd u skR apprF
+      | Construct u ->
+          let () = debug_unification (fun () -> Pp.(v 0 (str "constructor" ++ cut ()))) in
+          eta_constructor flags env evd u skR apprF
       | _ -> UnifFailure (evd,NotSameHead)
     in
     match Stack.list_of_app_stack skF with
@@ -934,6 +945,7 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
   let app_empty = match sk1, sk2 with [], [] -> true | _ -> false in
   (* Checks whether two terms with the same head unify (without unfolding) *)
   let eq_head appr1 appr2 evd =
+    let () = debug_unification (fun () -> Pp.(v 0 (str "compare heads" ++ cut ()))) in
     (* Gather the universe constraints that would make term1 and term2 equal.
        If these only involve unifications of flexible universes to other universes,
        allow this identification (first-order unification of universes). Otherwise
@@ -995,20 +1007,23 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
   let rec get_cs flags env sigma p1 appr1 appr2 =
     let () = debug_unification (fun () -> Pp.(v 0 (str "Search for CS on " ++ pr_state env evd appr1 ++ cut () ++ pr_state env evd appr2 ++ cut ()))) in
     let cs sigma =
+      let () = debug_unification (fun () -> Pp.(v 0 (str "CS" ++ cut ()))) in
       try
         let s = check_conv_record env sigma p1 appr2 in
         conv_record flags env s
       with Not_found -> UnifFailure (sigma, NoCanonicalStructure) in
     let red sigma =
+      let () = debug_unification (fun () -> Pp.(v 0 (str "red" ++ cut ()))) in
       let (term2, sk2) = appr2 in
       match flex_kind_of_term flags env sigma term2 sk2 with
       | Flexible _ | Rigid -> UnifFailure (sigma, NoCanonicalStructure)
       | MaybeFlexible vsk2' ->
+        let () = debug_unification (fun () -> Pp.(v 0 (str "reducing subject" ++ cut ()))) in
         let appr2 = whd_betaiota_deltazeta_for_iota_state flags.open_ts env sigma vsk2' in
         get_cs flags env sigma p1 appr1 appr2 in
     ise_try sigma [eq_head appr1 appr2; cs; red] in
-  let () = debug_unification (fun () -> Pp.(v 0 (pr_state env evd appr1 ++ cut () ++ pr_state env evd appr2 ++ cut ()))) in
-  match (flex_kind_of_term flags env evd term1 sk1,
+  let () = debug_unification (fun () -> Pp.(v 0 (str "main loop" ++ pr_state env evd appr1 ++ cut () ++ pr_state env evd appr2 ++ cut ()))) in
+  match (match (flex_kind_of_term flags env evd term1 sk1,
          flex_kind_of_term flags env evd term2 sk2) with
     | Flexible (sp1,al1), Flexible (sp2,al2) ->
       (* Notations:
@@ -1098,16 +1113,26 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
         | Proj.CS p1, _ ->
           let () = debug_unification (fun () -> Pp.(v 0 (str "LHS is CS" ++ cut ()))) in
           ise_try evd [
-            (fun i -> get_cs flags env i p1 appr1 (snd hds));
             (fun i ->
+              let () = debug_unification (fun () -> Pp.(v 0 (str "getting CS" ++ cut ()))) in
+              let r = get_cs flags env i p1 appr1 (snd hds) in
+              let () = debug_unification (fun () -> Pp.(v 0 (str (match r with UnifFailure(_, _) -> "failed to get" | _ -> "got") ++ str " CS" ++ cut ()))) in
+              r);
+            (fun i ->
+              let () = debug_unification (fun () -> Pp.(v 0 (str "reducing RHS" ++ cut ()))) in
               evar_eqappr_x flags env evd pbty hds (Some true) appr1
                 (whd_betaiota_deltazeta_for_iota_state
                    flags.open_ts env evd vsk2'))]
         | _, Proj.CS p2 ->
           let () = debug_unification (fun () -> Pp.(v 0 (str "RHS is CS" ++ cut ()))) in
           ise_try evd [
-            (fun i -> get_cs flags env i p2 appr2 (fst hds));
             (fun i ->
+              let () = debug_unification (fun () -> Pp.(v 0 (str "getting CS" ++ cut ()))) in
+              let r = get_cs flags env i p2 appr2 (fst hds) in
+              let () = debug_unification (fun () -> Pp.(v 0 (str (match r with UnifFailure(_, _) -> "failed to get" | _ -> "got") ++ str " CS" ++ cut ()))) in
+              r);
+            (fun i ->
+              let () = debug_unification (fun () -> Pp.(v 0 (str "reducing LHS" ++ cut ()))) in
               evar_eqappr_x flags env evd pbty hds (Some false)
                 (whd_betaiota_deltazeta_for_iota_state
                    flags.open_ts env evd vsk1')
@@ -1351,7 +1376,13 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
         | Proj _, _ -> UnifFailure (evd,NotSameHead)
         | (App _ | Cast _), _ -> assert false
         | LetIn _, _ -> assert false
-      end
+      end) with
+    | exception e ->
+      let () = debug_unification (fun () -> Pp.(v 0 (str "evar_eqappr_x exploded" ++ cut ()))) in
+      raise e
+    | r ->
+      let () = debug_unification (fun () -> Pp.(v 0 (str "evar_eqappr_x " ++ str (match r with UnifFailure(_, _) -> "failed" | _ -> "succeeded") ++ cut ()))) in
+      r
 
 and conv_record flags env (evd,(h,h2),c,bs,(params,params1),(us,us2),(sk1,sk2),c1,(n,t2)) =
   (* Tries to unify the states
@@ -1395,6 +1426,7 @@ and conv_record flags env (evd,(h,h2),c,bs,(params,params1),(us,us2),(sk1,sk2),c
     in
     let app = mkApp (c, Array.rev_of_list ks) in
     let unif_params =
+      let () = debug_unification (fun () -> Pp.(v 0 (str "unif_params" ++ cut ()))) in
       match params1 with
       | None -> []
       | Some params1 ->
@@ -1404,13 +1436,24 @@ and conv_record flags env (evd,(h,h2),c,bs,(params,params1),(us,us2),(sk1,sk2),c
             params1 params)] in
     ise_and evd' (
         unif_params @
-       [(fun i -> ise_list2 i
+       [(fun i ->
+        let () = debug_unification (fun () -> Pp.(v 0 (str "us" ++ cut ()))) in
+         ise_list2 i
            (fun i' u1 u -> evar_conv_x flags env i' CONV u1 (substl ks u))
            us2 us);
-       (fun i -> evar_conv_x flags env i CONV c1 app);
-       (fun i -> exact_ise_stack2 env i (evar_conv_x flags) sk1 sk2);
-       test;
-       (fun i -> evar_conv_x flags env i CONV h2
+       (fun i ->
+         let a = app in
+          let () = debug_unification (fun () -> Pp.(v 0 (str "c" ++ cut() ++ Termops.Internal.print_constr_env env i c1 ++ cut () ++ Termops.Internal.print_constr_env env i a ++ cut ()))) in
+         evar_conv_x flags env i CONV c1 app);
+       (fun i ->
+          let () = debug_unification (fun () -> Pp.(v 0 (str "stacks" ++ cut ()))) in
+         exact_ise_stack2 env i (evar_conv_x flags) sk1 sk2);
+       (fun i ->
+          let () = debug_unification (fun () -> Pp.(v 0 (str "test" ++ cut ()))) in
+         test i);
+       (fun i ->
+          let () = debug_unification (fun () -> Pp.(v 0 (str "h" ++ cut ()))) in
+         evar_conv_x flags env i CONV h2
          (fst (decompose_app i (substl ks h))))])
   else UnifFailure(evd,(*dummy*)NotSameHead)
 
@@ -1434,7 +1477,9 @@ and eta_constructor flags env evd ((ind, i), u) sk1 (term2,sk2) =
                  EConstr.mkProj (Projection.make p false, r, term))
                (Array.to_list projs)
            in
+          let () = debug_unification (fun () -> Pp.(v 0 (str "eta_constructor: ts" ++ cut ()))) in
           let f i t1 t2 = evar_conv_x { flags with with_cs = false } env i CONV t1 t2 in
+          let () = debug_unification (fun () -> Pp.(v 0 (str "eta_constructor: ls" ++ cut ()))) in
           ise_list2 evd f l1' l2'
          with
          | Failure _ ->
