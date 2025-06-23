@@ -932,9 +932,15 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
           eta_constructor flags env evd u skR apprF
       | _ -> UnifFailure (evd,NotSameHead)
     in
+    let tc evd =
+      let ty = Retyping.get_type_of env evd termF in
+      let evd, c = Typeclasses.resolve_one_typeclass env evd ty in
+      ise_and evd [
+        (fun i -> evar_conv_x flags env i CONV termF c);
+        (fun i -> switch (evar_eqappr_x flags env i pbty keys lastUnfolded) apprF apprR)] in
     match Stack.list_of_app_stack skF with
     | None ->
-        ise_try evd [consume_stack l2r apprF apprR; eta]
+        ise_try evd [consume_stack l2r apprF apprR; eta; tc]
     | Some lF ->
         let tR = Stack.zip evd apprR in
           miller_pfenning l2r
