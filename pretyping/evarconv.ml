@@ -934,8 +934,9 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
     in
     let tc evd =
       let ty = Retyping.get_type_of env evd termF in
-      let evd, c = Typeclasses.resolve_one_typeclass env evd ty in
-      ise_and evd [
+      match Typeclasses.resolve_one_typeclass env evd ty with
+      | exception Not_found -> UnifFailure (evd, NotSameHead)
+      | evd, c -> ise_and evd [
         (fun i -> evar_conv_x flags env i CONV termF c);
         (fun i -> switch (evar_eqappr_x flags env i pbty keys lastUnfolded) apprF apprR)] in
     match Stack.list_of_app_stack skF with
