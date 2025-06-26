@@ -933,12 +933,16 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
       | _ -> UnifFailure (evd,NotSameHead)
     in
     let tc evd =
-      let ty = Retyping.get_type_of env evd termF in
-      match Typeclasses.resolve_one_typeclass env evd ty with
-      | exception Not_found -> UnifFailure (evd, NotSameHead)
-      | evd, c -> ise_and evd [
-        (fun i -> evar_conv_x flags env i CONV termF c);
-        (fun i -> switch (evar_eqappr_x flags env i pbty keys lastUnfolded) apprF apprR)] in
+      let (e, _) = EConstr.destEvar evd termF in
+      if not (Evd.is_typeclass_evar evd e) then UnifFailure (evd, NotSameHead) else
+      let tc_evars = Evd.get_typeclass_evars evd in
+      let evd = Evd.set_typeclass_evars evd (Evar.Set.singleton e) in
+      let evd = Typeclasses.resolve_typeclasses env evd in
+      if not (Evd.is_defined evd e) then UnifFailure (evd, NotSameHead) else
+      let tc_evars = Evar.Set.union tc_evars (Evd.get_typeclass_evars evd) in
+      let tc_evars = Evar.Set.filter (fun e -> not (Evd.is_defined evd e)) tc_evars in
+      let evd = Evd.set_typeclass_evars evd tc_evars in
+      evar_eqappr_x flags env evd pbty keys lastUnfolded (whd_nored_state env evd apprF) apprR in
     match Stack.list_of_app_stack skF with
     | None ->
         ise_try evd [consume_stack l2r apprF apprR; eta; tc]
