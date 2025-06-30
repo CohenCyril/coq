@@ -1151,25 +1151,13 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
                 (whd_betaiota_deltazeta_for_iota_state
                    flags.open_ts env evd vsk1')
                 appr2)]
-        | Proj.Reducible n1, Proj.Reducible n2 ->
+        | Proj.Reducible n1, Proj.Reducible n2 when n1 = n2 ->
           let () = debug_unification (fun () -> Pp.(v 0 (str "both sides are reducible" ++ cut ()))) in
           ise_try evd [
+            (fun evd -> evar_eqappr_x {flags with open_ts = TransparentState.empty} env evd pbty hds lastUnfolded appr1 appr2);
             (fun evd -> let appr1 = whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd vsk1' in
               let appr2 = whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd vsk2' in
-              evar_eqappr_x flags env evd pbty (if n1 = n2 then (appr1, appr2) else hds) None appr1 appr2);
-            eq_head]
-
-        | Proj.Reducible _, _ ->
-          let () = debug_unification (fun () -> Pp.(v 0 (str "LHS is reducible" ++ cut ()))) in
-          evar_eqappr_x flags env evd pbty hds (Some false)
-            (whd_betaiota_deltazeta_for_iota_state
-               flags.open_ts env evd vsk1')
-            appr2
-        | _, Proj.Reducible _ ->
-          let () = debug_unification (fun () -> Pp.(v 0 (str "RHS is reducible" ++ cut ()))) in
-          evar_eqappr_x flags env evd pbty hds (Some true) appr1
-            (whd_betaiota_deltazeta_for_iota_state
-               flags.open_ts env evd vsk2')
+              evar_eqappr_x flags env evd pbty (if n1 = n2 then (appr1, appr2) else hds) None appr1 appr2)]
         | _, _ ->
         let () = debug_unification (fun () -> Pp.(v 0 (str "no proj or stuck" ++ cut ()))) in
         (* We remember if the LHS is a reducible projection to decide if we unfold left first. *)
