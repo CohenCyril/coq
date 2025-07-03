@@ -1539,7 +1539,15 @@ let rec unify_0_with_initial_metas (subst : subst0) conv_at_top env cv_pb flags 
       | Clval (_, _, b) -> Some b.rebus
       | exception Not_found -> None
       in
-      try Evarconv.check_conv_record (fst curenvnb) sigma (Evarconv.decompose_proj ~metas (fst curenvnb) sigma f1l1) f2l2
+      try
+        let (_, (_, c1, _)) as p1 = Evarconv.decompose_proj ~metas (fst curenvnb) sigma f1l1 in
+        let c1 = whd_all env sigma c1 in
+        (* [proj (ctor ...)]: don't use CS *)
+        match kind sigma c1 with
+        | App (h,_) when isConstruct sigma h -> raise Not_found
+        | Construct _ -> raise Not_found
+        | _ when not (has_undefined_evars_or_metas sigma c1) -> raise Not_found
+        | _ -> Evarconv.check_conv_record (fst curenvnb) sigma p1 f2l2
       with Not_found -> error_cannot_unify (fst curenvnb) sigma (cM,cN)
     in
     if Reductionops.Stack.compare_shape ts ts1 then
