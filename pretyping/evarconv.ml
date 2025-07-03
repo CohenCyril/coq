@@ -948,24 +948,21 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
         ise_try evd [consume_stack l2r apprF apprR; eta; tc]
     | Some lF ->
         let tR = Stack.zip evd apprR in
-          miller_pfenning l2r
-            (fun () ->
-              ise_try evd
-                [eta;(* Postpone the use of an heuristic *)
-                 (fun i ->
-                   if not (occur_rigidly flags env i ev tR) then
-                     let i,tF =
-                       if isRel i tR || isVar i tR then
-                         (* Optimization so as to generate candidates *)
-                         let i,ev = evar_absorb_arguments env i ev lF in
-                         i,mkEvar ev
-                       else
-                         i,Stack.zip evd apprF in
-                     switch (fun x y -> Success (Evarutil.add_unification_pb (pbty,env,x,y) i))
-                       tF tR
-                   else
-                     UnifFailure (evd,OccurCheck (fst ev,tR)))])
-            ev lF tR evd
+        let postpone i =
+          if occur_rigidly flags env i ev tR then
+            UnifFailure (evd,OccurCheck (fst ev,tR)) else
+          let i,tF =
+            if isRel i tR || isVar i tR then
+              (* Optimization so as to generate candidates *)
+              let i,ev = evar_absorb_arguments env i ev lF in
+              i,mkEvar ev
+            else
+              i,Stack.zip evd apprF in
+          switch (fun x y -> Success (Evarutil.add_unification_pb (pbty,env,x,y) i))
+            tF tR in
+        ise_try evd [
+          (fun evd -> miller_pfenning l2r (fun () -> ise_try evd [eta;(* Postpone the use of an heuristic *) postpone]) ev lF tR evd);
+          eta]
   in
   let first_order env i t1 t2 sk1 sk2 =
     (* Try first-order unification *)
@@ -1475,14 +1472,17 @@ and conv_record flags env (evd,(h,h2),c,bs,(params,params1),(us,us2),(sk1,sk2),c
   else UnifFailure(evd,(*dummy*)NotSameHead)
 
 and eta_constructor flags env evd ((ind, i), u) sk1 (term2,sk2) =
+  let () = debug_unification (fun () -> Pp.(v 0 (str "eta_constructor" ++ cut ()))) in
   (* reduces an equation <Construct(ind,i)|sk1> == <term2|sk2> to the
      equations [arg_i = Proj_i (sk2[term2])] where [sk1] is [params args] *)
   let open Declarations in
   let mib = lookup_mind (fst ind) env in
   if mib.mind_finite <> BiFinite then
+    let () = debug_unification (fun () -> Pp.(v 0 (str "inductive is not BiFinite" ++ cut ()))) in
     UnifFailure (evd,NotSameHead) else
   match Stack.list_of_app_stack sk1 with
   | None ->
+    let () = debug_unification (fun () -> Pp.(v 0 (str "stack is not applicative" ++ cut ()))) in
     UnifFailure (evd,NotSameHead)
   | Some l1 -> begin
     match get_projections env ind with
@@ -1516,7 +1516,9 @@ and eta_constructor flags env evd ((ind, i), u) sk1 (term2,sk2) =
         let f i t1 t2 = evar_conv_x { flags with with_cs = false } env i CONV t1 t2 in
         ise_list2 evd f l1' l2'
        with
-       | _ -> UnifFailure(evd,NotSameHead))
+       | _ ->
+        let () = debug_unification (fun () -> Pp.(v 0 (str "stack is not applicative" ++ cut ()))) in
+           UnifFailure(evd,NotSameHead))
   end
 
 let evar_conv_x flags env evd pbty term1 term2 =
