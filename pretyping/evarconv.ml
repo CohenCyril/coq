@@ -937,7 +937,11 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
       if not (Evd.is_typeclass_evar evd e) then UnifFailure (evd, NotSameHead) else
       let tc_evars = Evd.get_typeclass_evars evd in
       let evd = Evd.set_typeclass_evars evd (Evar.Set.singleton e) in
-      let evd = Typeclasses.resolve_typeclasses env evd in
+      match Typeclasses.resolve_typeclasses env evd with
+      | exception _ ->
+        let () = debug_unification (fun () -> Pp.(v 0 (str "tc solver exploded" ++ cut ()))) in
+        UnifFailure (evd, NotSameHead)
+      | evd ->
       if not (Evd.is_defined evd e) then UnifFailure (evd, NotSameHead) else
       let tc_evars = Evar.Set.union tc_evars (Evd.get_typeclass_evars evd) in
       let tc_evars = Evar.Set.filter (fun e -> not (Evd.is_defined evd e)) tc_evars in
