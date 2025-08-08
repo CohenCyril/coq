@@ -537,9 +537,7 @@ let rec execute env sigma cstr =
 
     | Evar ev ->
         let ty = EConstr.existential_type sigma ev in
-        let sigma, jty = execute env sigma ty in
-        let sigma, jty = assumption_of_judgment env sigma jty in
-        sigma, { uj_val = cstr; uj_type = jty }
+        sigma, { uj_val = cstr; uj_type = ty }
 
     | Rel n ->
         sigma, judge_of_relative env n
