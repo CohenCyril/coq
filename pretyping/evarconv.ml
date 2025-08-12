@@ -725,6 +725,66 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
   let quick_fail i = (* not costly, loses info *)
     UnifFailure (i, NotSameHead)
   in
+  (* Checks whether two terms with the same head unify (without unfolding) *)
+  let eq_head appr1 appr2 evd =
+    let () = debug_unification (fun () -> Pp.(v 0 (str "compare heads" ++ cut ()))) in
+    (* Gather the universe constraints that would make term1 and term2 equal.
+       If these only involve unifications of flexible universes to other universes,
+       allow this identification (first-order unification of universes). Otherwise
+       fallback to unfolding.
+    *)
+    let (term1, sk1) = appr1 in
+    let (term2, sk2) = appr2 in
+    let check_univs univs i =
+      match univs with
+      | None -> UnifFailure (i,NotSameHead)
+      | Some univs ->
+        try Success (Evd.add_universe_constraints i univs)
+        with UniversesDiffer -> UnifFailure (i,NotSameHead)
+        | UGraph.UniverseInconsistency p -> UnifFailure (i, UnifUnivInconsistency p) in
+    match kind evd term1, kind evd term2 with
+    | Proj (p1, _, c1), Proj (p2, _, c2) ->
+      if not (QProjection.Repr.equal env (Projection.repr p1) (Projection.repr p2))
+      then UnifFailure (evd,NotSameHead)
+      else ise_and evd [
+        (fun i -> evar_conv_x flags env i CONV c1 c2);
+        (fun i -> exact_ise_stack2 env i (evar_conv_x flags) sk1 sk2)]
+    | Proj (p1, _, c1), Const (p2, u2) ->
+      if not (QConstant.equal env (Projection.constant p1) p2)
+      then UnifFailure (evd,NotSameHead)
+      else (match destApp evd (Retyping.expand_projection env evd p1 c1 []) with
+      | exception Retyping.RetypeError _ -> UnifFailure (evd,NotSameHead)
+      | term1, args1 -> ise_and evd [
+        check_univs (EConstr.eq_constr_universes env evd term1 term2);
+        (fun i -> exact_ise_stack2 env i (evar_conv_x flags) (Stack.append_app args1 sk1) sk2)])
+    | Const (p1, u1), Proj (p2, _, c2) ->
+      if not (QConstant.equal env p1 (Projection.constant p2))
+      then UnifFailure (evd,NotSameHead)
+      else (match destApp evd (Retyping.expand_projection env evd p2 c2 []) with
+      | exception Retyping.RetypeError _ -> UnifFailure (evd,NotSameHead)
+      | term2, args2 -> ise_and evd [
+        check_univs (EConstr.eq_constr_universes env evd term1 term2);
+        (fun i -> exact_ise_stack2 env i (evar_conv_x flags) sk1 (Stack.append_app args2 sk2))])
+    | _, _ ->
+      ise_and evd [
+        check_univs (EConstr.eq_constr_universes env evd term1 term2);
+        (fun i -> exact_ise_stack2 env i (evar_conv_x flags) sk1 sk2)] in
+  let module Proj = struct
+    type t =
+      | None
+      | Reducible of Names.Constant.t
+      | CS of ((Names.Constant.t * EConstr.EInstance.t) * (EConstr.constr list option * EConstr.constr * Reductionops.Stack.t))
+    end in
+  let get_proj_case appr =
+    match decompose_proj env evd appr with
+    | exception Not_found -> Proj.None
+    | ((n, _), (_, c, _)) as p ->
+    let c = whd_all env evd c in
+    match kind evd c with
+    | App (h, _) when isConstruct evd h -> Proj.Reducible n
+    | Construct _ -> Proj.Reducible n
+    | _ when is_ground_term evd c -> Proj.None
+    | _ -> Proj.CS p in
   let miller_pfenning l2r fallback ev lF tM evd =
     match is_unification_pattern_evar env evd ev lF tM with
       | None -> fallback ()
@@ -797,6 +857,26 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
             else quick_fail i)
             ev lF tM i
   in
+  (* Evar must be undefined since we have flushed evars *)
+  let rec get_cs flags env sigma p1 appr1 appr2 =
+    let () = debug_unification (fun () -> Pp.(v 0 (str "Search for CS on " ++ pr_state env evd appr1 ++ cut () ++ pr_state env evd appr2 ++ cut ()))) in
+    let cs sigma =
+      let () = debug_unification (fun () -> Pp.(v 0 (str "CS" ++ cut ()))) in
+      try
+        let s = check_conv_record env sigma p1 appr2 in
+        conv_record flags env s
+      with Not_found -> UnifFailure (sigma, NoCanonicalStructure) in
+    let red sigma =
+      let () = debug_unification (fun () -> Pp.(v 0 (str "red" ++ cut ()))) in
+      let (term2, sk2) = appr2 in
+      match flex_kind_of_term flags env sigma term2 sk2 with
+      | Rigid -> UnifFailure (sigma, NoCanonicalStructure)
+      | Flexible ev -> miller (lastUnfolded = Some false) ev appr2 appr1 sigma
+      | MaybeFlexible vsk2' ->
+        let () = debug_unification (fun () -> Pp.(v 0 (str "reducing subject" ++ cut ()))) in
+        let appr2 = whd_betaiota_deltazeta_for_iota_state flags.open_ts env sigma vsk2' in
+        get_cs flags env sigma p1 appr1 appr2 in
+    ise_try sigma [eq_head appr1 appr2; cs; red] in
   let flex_maybeflex l2r ev (termF,skF as apprF) (termM, skM as apprM) vskM =
     (* Problem: E[?n[inst]] = E'[redex]
        Strategy, as far as I understand:
@@ -806,11 +886,17 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
            recursively solve E2[?n[inst]] = E'2[redex]
        3.  reduce the redex into M and recursively solve E[?n[inst]] =? E'[M] *)
     let switch f a b = if l2r then f a b else f b a in
+    let cs i =
+      if not flags.with_cs || lastUnfolded = Some l2r then quick_fail i else
+      match get_proj_case apprM with
+      | Proj.CS p -> get_cs flags env i p apprM ((if l2r then fst else snd) hds)
+      | _ -> quick_fail i in
     let delta i =
-      switch (evar_eqappr_x flags env i pbty hds None) apprF
+      switch (evar_eqappr_x flags env i pbty hds (Some (not l2r))) apprF
         (whd_betaiota_deltazeta_for_iota_state flags.open_ts env i vskM)
     in
     let default i = ise_try i [miller l2r ev apprF apprM;
+                               cs;
                                consume l2r apprF apprM;
                                delta]
     in
@@ -832,7 +918,7 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
                   let delta' i =
                     switch (evar_eqappr_x flags env i pbty hds None) apprF apprM'
                   in
-                  fun i -> ise_try i [miller l2r ev apprF apprM';
+                  fun i -> ise_try i [miller l2r ev apprF apprM'; cs;
                                    consume l2r apprF apprM'; delta']
                 with Retyping.RetypeError _ ->
                 (* Happens thanks to w_unify building ill-typed terms *)
@@ -957,85 +1043,6 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
     | _, _ -> anomaly (Pp.str "Unexpected result from ise_stack2.")
   in
   let app_empty = match sk1, sk2 with [], [] -> true | _ -> false in
-  (* Checks whether two terms with the same head unify (without unfolding) *)
-  let eq_head appr1 appr2 evd =
-    let () = debug_unification (fun () -> Pp.(v 0 (str "compare heads" ++ cut ()))) in
-    (* Gather the universe constraints that would make term1 and term2 equal.
-       If these only involve unifications of flexible universes to other universes,
-       allow this identification (first-order unification of universes). Otherwise
-       fallback to unfolding.
-    *)
-    let (term1, sk1) = appr1 in
-    let (term2, sk2) = appr2 in
-    let check_univs univs i =
-      match univs with
-      | None -> UnifFailure (i,NotSameHead)
-      | Some univs ->
-        try Success (Evd.add_universe_constraints i univs)
-        with UniversesDiffer -> UnifFailure (i,NotSameHead)
-        | UGraph.UniverseInconsistency p -> UnifFailure (i, UnifUnivInconsistency p) in
-    match kind evd term1, kind evd term2 with
-    | Proj (p1, _, c1), Proj (p2, _, c2) ->
-      if not (QProjection.Repr.equal env (Projection.repr p1) (Projection.repr p2))
-      then UnifFailure (evd,NotSameHead)
-      else ise_and evd [
-        (fun i -> evar_conv_x flags env i CONV c1 c2);
-        (fun i -> exact_ise_stack2 env i (evar_conv_x flags) sk1 sk2)]
-    | Proj (p1, _, c1), Const (p2, u2) ->
-      if not (QConstant.equal env (Projection.constant p1) p2)
-      then UnifFailure (evd,NotSameHead)
-      else (match destApp evd (Retyping.expand_projection env evd p1 c1 []) with
-      | exception Retyping.RetypeError _ -> UnifFailure (evd,NotSameHead)
-      | term1, args1 -> ise_and evd [
-        check_univs (EConstr.eq_constr_universes env evd term1 term2);
-        (fun i -> exact_ise_stack2 env i (evar_conv_x flags) (Stack.append_app args1 sk1) sk2)])
-    | Const (p1, u1), Proj (p2, _, c2) ->
-      if not (QConstant.equal env p1 (Projection.constant p2))
-      then UnifFailure (evd,NotSameHead)
-      else (match destApp evd (Retyping.expand_projection env evd p2 c2 []) with
-      | exception Retyping.RetypeError _ -> UnifFailure (evd,NotSameHead)
-      | term2, args2 -> ise_and evd [
-        check_univs (EConstr.eq_constr_universes env evd term1 term2);
-        (fun i -> exact_ise_stack2 env i (evar_conv_x flags) sk1 (Stack.append_app args2 sk2))])
-    | _, _ ->
-      ise_and evd [
-        check_univs (EConstr.eq_constr_universes env evd term1 term2);
-        (fun i -> exact_ise_stack2 env i (evar_conv_x flags) sk1 sk2)] in
-  let module Proj = struct
-    type t =
-      | None
-      | Reducible of Names.Constant.t
-      | CS of ((Names.Constant.t * EConstr.EInstance.t) * (EConstr.constr list option * EConstr.constr * Reductionops.Stack.t))
-    end in
-  let get_proj_case appr =
-    match decompose_proj env evd appr with
-    | exception Not_found -> Proj.None
-    | ((n, _), (_, c, _)) as p ->
-    let c = whd_all env evd c in
-    match kind evd c with
-    | App (h, _) when isConstruct evd h -> Proj.Reducible n
-    | Construct _ -> Reducible n
-    | _ when is_ground_term evd c -> Proj.None
-    | _ -> Proj.CS p in
-  (* Evar must be undefined since we have flushed evars *)
-  let rec get_cs flags env sigma p1 appr1 appr2 =
-    let () = debug_unification (fun () -> Pp.(v 0 (str "Search for CS on " ++ pr_state env evd appr1 ++ cut () ++ pr_state env evd appr2 ++ cut ()))) in
-    let cs sigma =
-      let () = debug_unification (fun () -> Pp.(v 0 (str "CS" ++ cut ()))) in
-      try
-        let s = check_conv_record env sigma p1 appr2 in
-        conv_record flags env s
-      with Not_found -> UnifFailure (sigma, NoCanonicalStructure) in
-    let red sigma =
-      let () = debug_unification (fun () -> Pp.(v 0 (str "red" ++ cut ()))) in
-      let (term2, sk2) = appr2 in
-      match flex_kind_of_term flags env sigma term2 sk2 with
-      | Flexible _ | Rigid -> UnifFailure (sigma, NoCanonicalStructure)
-      | MaybeFlexible vsk2' ->
-        let () = debug_unification (fun () -> Pp.(v 0 (str "reducing subject" ++ cut ()))) in
-        let appr2 = whd_betaiota_deltazeta_for_iota_state flags.open_ts env sigma vsk2' in
-        get_cs flags env sigma p1 appr1 appr2 in
-    ise_try sigma [eq_head appr1 appr2; cs; red] in
   let () = debug_unification (fun () -> Pp.(v 0 (str "main loop " ++ pr_state env evd appr1 ++ cut () ++ pr_state env evd appr2 ++ cut () ++ str "last reduction was " ++ str (match lastUnfolded with None -> "none" | Some true -> "RHS" | _ -> "LHS") ++ cut() ))) in
   match (match (flex_kind_of_term flags env evd term1 sk1,
          flex_kind_of_term flags env evd term2 sk2) with
@@ -1110,8 +1117,8 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
 
 
         | _, _ ->
-        let p1 = if lastUnfolded = Some true then Proj.None else get_proj_case appr1 in
-        let p2 = if lastUnfolded = Some false then Proj.None else get_proj_case appr2 in
+        let p1 = match get_proj_case appr1 with Proj.CS _ when lastUnfolded = Some true -> Proj.None | p -> p in
+        let p2 = match get_proj_case appr2 with Proj.CS _ when lastUnfolded = Some false -> Proj.None | p -> p in
         (match p1, p2 with
         | Proj.CS p1, Proj.CS p2 when flags.with_cs ->
           let () = debug_unification (fun () -> Pp.(v 0 (str "both sides are CS" ++ cut ()))) in
@@ -1133,10 +1140,11 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
               let () = debug_unification (fun () -> Pp.(v 0 (str (match r with UnifFailure(_, _) -> "failed to get" | _ -> "got") ++ str " CS" ++ cut ()))) in
               r);
             (fun i ->
-              let () = debug_unification (fun () -> Pp.(v 0 (str "reducing RHS" ++ cut ()))) in
-              evar_eqappr_x flags env evd pbty hds (Some true) appr1
+              let () = debug_unification (fun () -> Pp.(v 0 (str "reducing LHS" ++ cut ()))) in
+              evar_eqappr_x flags env evd pbty hds (Some false)
                 (whd_betaiota_deltazeta_for_iota_state
-                   flags.open_ts env evd vsk2'))]
+                   flags.open_ts env evd vsk1')
+                appr2)]
         | _, Proj.CS p2 when flags.with_cs ->
           let () = debug_unification (fun () -> Pp.(v 0 (str "RHS is CS" ++ cut ()))) in
           ise_try evd [
@@ -1146,18 +1154,24 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
               let () = debug_unification (fun () -> Pp.(v 0 (str (match r with UnifFailure(_, _) -> "failed to get" | _ -> "got") ++ str " CS" ++ cut ()))) in
               r);
             (fun i ->
-              let () = debug_unification (fun () -> Pp.(v 0 (str "reducing LHS" ++ cut ()))) in
-              evar_eqappr_x flags env evd pbty hds (Some false)
+              let () = debug_unification (fun () -> Pp.(v 0 (str "reducing RHS" ++ cut ()))) in
+              evar_eqappr_x flags env evd pbty hds (Some true) appr1
                 (whd_betaiota_deltazeta_for_iota_state
-                   flags.open_ts env evd vsk1')
-                appr2)]
-        | Proj.Reducible n1, Proj.Reducible n2 when n1 = n2 ->
+                   flags.open_ts env evd vsk2'))]
+        | _, _ -> (match p1, p2 with
+        | Proj.Reducible n1, Proj.Reducible n2 ->
           let () = debug_unification (fun () -> Pp.(v 0 (str "both sides are reducible" ++ cut ()))) in
-          ise_try evd [
-            (fun evd -> evar_eqappr_x {flags with open_ts = TransparentState.empty} env evd pbty hds lastUnfolded appr1 appr2);
-            (fun evd -> let appr1 = whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd vsk1' in
-              let appr2 = whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd vsk2' in
-              evar_eqappr_x flags env evd pbty (if n1 = n2 then (appr1, appr2) else hds) None appr1 appr2)]
+          let appr1 = whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd vsk1' in
+          let appr2 = whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd vsk2' in
+          evar_eqappr_x flags env evd pbty (if n1 = n2 then (appr1, appr2) else hds) None appr1 appr2
+        | Proj.Reducible n1, _ ->
+          let () = debug_unification (fun () -> Pp.(v 0 (str "LHS is reducible" ++ cut ()))) in
+          let appr1 = whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd vsk1' in
+          evar_eqappr_x flags env evd pbty hds (Some false) appr1 appr2
+        | _, Proj.Reducible n2 ->
+          let () = debug_unification (fun () -> Pp.(v 0 (str "RHS is reducible" ++ cut ()))) in
+          let appr2 = whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd vsk2' in
+          evar_eqappr_x flags env evd pbty hds (Some true) appr1 appr2
         | _, _ ->
         let () = debug_unification (fun () -> Pp.(v 0 (str "no proj or stuck" ++ cut ()))) in
         (* We remember if the LHS is a reducible projection to decide if we unfold left first. *)
@@ -1200,7 +1214,7 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
               (whd_betaiota_deltazeta_for_iota_state
                  flags.open_ts env i vsk2')
         in
-        ise_try evd [f1; f2])
+        ise_try evd [f1; f2]))
     end
 
     | Rigid, Rigid when EConstr.isLambda evd term1 && EConstr.isLambda evd term2 ->
@@ -1223,7 +1237,7 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
            if (not flags.with_cs) || lastUnfolded = Some true then UnifFailure (i,NoCanonicalStructure)
            else
              (match get_proj_case appr1 with
-             | Proj.CS p1 when flags.with_cs ->
+             | Proj.CS p1 ->
                let () = debug_unification (fun () -> Pp.(v 0 (str "CS with rigid RHS" ++ cut ()))) in
                get_cs flags env evd p1 appr1 (snd hds)
              | _ -> quick_fail i)
@@ -1240,7 +1254,7 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
            if (not flags.with_cs) || lastUnfolded = Some false then UnifFailure (i,NoCanonicalStructure)
            else
              (match get_proj_case appr2 with
-             | Proj.CS p2 when flags.with_cs ->
+             | Proj.CS p2 ->
                let () = debug_unification (fun () -> Pp.(v 0 (str "CS with rigid LHS" ++ cut ()))) in
                get_cs flags env evd p2 appr2 (fst hds)
              | _ -> quick_fail i)
