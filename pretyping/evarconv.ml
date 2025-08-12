@@ -633,6 +633,26 @@ let conv_fun f flags on_types =
     | TypeUnification -> typefn
     | TermUnification -> termfn
 
+let infer_conv_noticing_evars ~pb ~ts env sigma t1 t2 =
+  let has_evar = ref false in
+  let evar_expand ev =
+    let v = existential_expand_value0 sigma ev in
+    let () = match v with
+    | CClosure.EvarUndefined _ -> has_evar := true
+    | CClosure.EvarDefined _ -> ()
+    in
+    v
+  in
+  let evar_handler = { (Evd.evar_handler sigma) with evar_expand } in
+  let conv = { genconv = fun pb ~l2r sigma -> Conversion.generic_conv pb ~l2r ~evars:evar_handler } in
+  match infer_conv_gen conv ~catch_incon:false ~pb ~ts env sigma t1 t2 with
+  | Some sigma -> Some (Success sigma)
+  | None ->
+    if !has_evar then None
+    else Some (UnifFailure (sigma, ConversionFailed (env,t1,t2)))
+  | exception UGraph.UniverseInconsistency e ->
+    if !has_evar then None
+    else Some (UnifFailure (sigma, UnifUnivInconsistency e))
 
 let rec evar_conv_x flags env evd pbty term1 term2 =
   let t = Random.int 1073741823 in
