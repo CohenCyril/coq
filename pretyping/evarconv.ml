@@ -724,6 +724,7 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
     hds (* Copy of the never-reduced appr1 and appr2 *)
     lastUnfolded (* tells which side was last unfolded, if any *)
     (term1, sk1 as appr1) (term2, sk2 as appr2) =
+  let t = Random.int 1073741823 in
   let quick_fail i = (* not costly, loses info *)
     UnifFailure (i, NotSameHead)
   in
@@ -951,7 +952,10 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
     let tc evd =
       let (e, _) = EConstr.destEvar evd termF in
       try let evd = get_tc evd e in
-        evar_eqappr_x flags env evd pbty hds lastUnfolded (whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd apprF) apprR
+        let apprF = whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd apprF in
+        let apprR = whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd apprR in
+        let () = debug_unification Pp.(fun () -> int t ++ str " get_tc succeeds with " ++ pr_state env evd apprF ++ cut ()) in
+        evar_eqappr_x flags env evd pbty hds lastUnfolded apprF apprR
       with _ -> quick_fail evd in
     match Stack.list_of_app_stack skF with
     | None ->
@@ -1041,10 +1045,11 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
     | _, _ -> anomaly (Pp.str "Unexpected result from ise_stack2.")
   in
   let app_empty = match sk1, sk2 with [], [] -> true | _ -> false in
-  let () = debug_unification (fun () -> Pp.(v 0 (pr_state env evd appr1 ++ cut () ++ pr_state env evd appr2 ++ cut ()))) in
+  let () = debug_unification (fun () -> Pp.(v 0 (int t ++ str " " ++ pr_state env evd appr1 ++ cut () ++ pr_state env evd appr2 ++ cut ()))) in
   match (flex_kind_of_term flags env evd term1 sk1,
          flex_kind_of_term flags env evd term2 sk2) with
     | Flexible (sp1,al1), Flexible (sp2,al2) ->
+      let () = debug_unification Pp.(fun () -> int t ++ str " both sides are flexible") in
       (* Notations:
          - "sk" is a stack (or, more abstractly, an evaluation context, written E)
          - "ev" is an evar "?ev", more precisely an evar ?n with an instance inst
@@ -1083,22 +1088,30 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
           | Success _ as x -> x
           | UnifFailure _ -> quick_fail i
         and f6 i =
+          let () = debug_unification Pp.(fun () -> int t ++ str " get_tc with both sides flexible") in
           try let evd = get_tc evd sp2 in
-            evar_eqappr_x flags env evd pbty hds lastUnfolded appr1 (whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd appr2)
+            evar_eqappr_x flags env evd pbty hds lastUnfolded
+              (whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd appr1)
+              (whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd appr2)
           with _ -> try
             let evd = get_tc evd sp1 in
-            evar_eqappr_x flags env evd pbty hds lastUnfolded (whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd appr1) appr2
+            evar_eqappr_x flags env evd pbty hds lastUnfolded
+              (whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd appr1)
+              (whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd appr2)
           with _ -> quick_fail i
         in
         ise_try evd [f1; f2; f3; f4; f5; f6]
 
     | Flexible ev1, MaybeFlexible v2 ->
+      let () = debug_unification Pp.(fun () -> int t ++ str " flex maybeflex") in
       flex_maybeflex true ev1 appr1 appr2 v2
 
     | MaybeFlexible vsk1, Flexible ev2 ->
+      let () = debug_unification Pp.(fun () -> int t ++ str " maybeflex flex") in
       flex_maybeflex false ev2 appr2 appr1 vsk1
 
     | MaybeFlexible (v1', sk1' as vsk1'), MaybeFlexible (v2', sk2' as vsk2') -> begin
+        let () = debug_unification Pp.(fun () -> int t ++ str " maybeflex maybeflex") in
         match EConstr.kind evd term1, EConstr.kind evd term2 with
         | LetIn (na1,b1,t1,c'1), LetIn (na2,b2,t2,c'2) ->
         let f1 i = (* FO *)
@@ -1217,6 +1230,7 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
     end
 
     | Rigid, Rigid when EConstr.isLambda evd term1 && EConstr.isLambda evd term2 ->
+        let () = debug_unification Pp.(fun () -> int t ++ str " rigid rigid") in
         let (na1,c1,c'1) = EConstr.destLambda evd term1 in
         let (na2,c2,c'2) = EConstr.destLambda evd term2 in
         ise_and evd
@@ -1228,10 +1242,15 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
            (* When in modulo_betaiota = false case, lambda's are not reduced *)
            (fun i -> exact_ise_stack2 env i (evar_conv_x flags) sk1 sk2)]
 
-    | Flexible ev1, Rigid -> flex_rigid true ev1 appr1 appr2
-    | Rigid, Flexible ev2 -> flex_rigid false ev2 appr2 appr1
+    | Flexible ev1, Rigid ->
+        let () = debug_unification Pp.(fun () -> int t ++ str " flex rigid") in
+        flex_rigid true ev1 appr1 appr2
+    | Rigid, Flexible ev2 ->
+        let () = debug_unification Pp.(fun () -> int t ++ str " rigid flex") in
+        flex_rigid false ev2 appr2 appr1
 
     | MaybeFlexible vsk1', Rigid ->
+        let () = debug_unification Pp.(fun () -> int t ++ str " maybeflex rigid") in
         let f3 i =
            if (not flags.with_cs) || lastUnfolded = Some true then UnifFailure (i,NoCanonicalStructure)
            else
@@ -1248,6 +1267,7 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
           ise_try evd [f3; f4]
 
     | Rigid, MaybeFlexible vsk2' ->
+        let () = debug_unification Pp.(fun () -> int t ++ str " rigid maybeflex") in
         let f3 i =
            if (not flags.with_cs) || lastUnfolded = Some false then UnifFailure (i,NoCanonicalStructure)
            else
@@ -1270,6 +1290,7 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
         eta_lambda env evd false term2 (term1,sk1)
 
     | Rigid, Rigid -> begin
+        let () = debug_unification Pp.(fun () -> int t ++ str " rigid rigid") in
         match EConstr.kind evd term1, EConstr.kind evd term2 with
 
         | Sort s1, Sort s2 when app_empty ->
