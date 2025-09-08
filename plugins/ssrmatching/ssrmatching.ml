@@ -537,18 +537,14 @@ let ungen_upat lhs (c, sigma, uc, t) u =
   c, sigma, uc, {u with up_k = k; up_FO = (Unification.Metamap.empty, lhs); up_f = f; up_a = a; up_t = t}
 
 let nb_cs_proj_args env ise pc f u =
-  pp(lazy(str "nb cs_proj_args " ++ Names.Constant.print pc ++ str " " ++ Termops.Internal.print_constr_env env ise f));
   let constr_key = Keys.constr_key env (EConstr.kind ise) in
   try
     let k = Option.get (constr_key (EConstr.mkConstU (pc, EConstr.EInstance.empty))) in
     let k' = Option.get (constr_key f) in
     if k = k' then -2 else
     let _, k = Option.get (Keys.equiv_keys k k') in
-    pp(lazy(str "nb cs_proj_args got " ++ int k));
     k
-  with _ ->
-    (pp(lazy(str "nb cs_proj_args failed"));
-    -1)
+  with _ -> -1
 
 let isEvar_k ise k f =
   match EConstr.kind ise f with Evar (k', _) -> k = k' | _ -> false
@@ -573,7 +569,6 @@ let splay_app ise =
   | _ -> c, [| |]
 
 let filter_upat env sigma i0 f n u fpats =
-  pp(lazy(str"filter_upat"));
   let open EConstr in
   let na = Array.length u.up_a in
   if n < na then fpats else
@@ -601,12 +596,10 @@ let filter_upat env sigma i0 f n u fpats =
         is_proj p in
       if is_proj then 0 else proj_nparams pc in
     let np = na + nc in
-    let () = pp(lazy(str"filter_upat proj" ++ int n ++ str " " ++ int np ++ str " " ++ int na ++ str " " ++ int nc)) in
     if n < np then -1 else np
   | _ -> -1 in
-  if np < na then (pp(lazy(str"filter_upat fails")); fpats) else
-
-  let () = if !i0 < np then i0 := n in pp(lazy(str"filter_upat succeeds")); (u, np) :: fpats
+  if np < na then fpats else
+  let () = if !i0 < np then i0 := n in (u, np) :: fpats
 
 let eq_prim_proj env sigma c t = match EConstr.kind sigma t with
   | Proj(p,_,_) -> Environ.QConstant.equal env (Projection.constant p) c

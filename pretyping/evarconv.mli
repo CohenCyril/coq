@@ -14,8 +14,6 @@ open Reductionops
 open Evd
 open Locus
 
-val debug_unification : CDebug.t
-
 (** {4 Unification for type inference. } *)
 
 type unify_flags = Evarsolve.unify_flags

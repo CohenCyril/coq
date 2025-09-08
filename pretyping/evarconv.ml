@@ -356,8 +356,7 @@ let check_conv_record env sigma ((proji, u), (params1, c1, extra_args1)) (t2,sk2
       end
     with | Not_found -> (* If we find no solution, we ask the hook if it has any. *)
       match (apply_hooks env sigma ((proji, u), params1, c1) (t2, args2)) with
-      | Some r ->
-          r, args2' @ args2
+      | Some r -> r, args2' @ args2
       | None -> raise Not_found
   in
   let t2 = Stack.zip sigma (h2, (Stack.append_app_list args2 Stack.empty)) in
@@ -655,8 +654,6 @@ let infer_conv_noticing_evars ~pb ~ts env sigma t1 t2 =
     else Some (UnifFailure (sigma, UnifUnivInconsistency e))
 
 let rec evar_conv_x flags env evd pbty term1 term2 =
-  let t = Random.int 1073741823 in
-  let () = debug_unification (fun () -> Pp.(v 0 (str "evar_conv_x: " ++ int t ++ cut () ++ Termops.Internal.print_constr_env env evd term1 ++ cut () ++ Termops.Internal.print_constr_env env evd term2 ++ cut ()))) in
   let term1 = whd_head_evar evd term1 in
   let term2 = whd_head_evar evd term2 in
   (* Maybe convertible but since reducing can erase evars which [evar_apprec]
@@ -667,8 +664,7 @@ let rec evar_conv_x flags env evd pbty term1 term2 =
       infer_conv_noticing_evars ~pb:pbty ~ts:flags.closed_ts env evd term1 term2
     else None
   in
-  let r =
-    match ground_test with
+  match ground_test with
     | Some result -> result
     | None ->
       (* Until pattern-unification is used consistently, use nohdbeta to not
@@ -699,8 +695,6 @@ let rec evar_conv_x flags env evd pbty term1 term2 =
                    NotClean: pruning in solve_simple_eqn is incomplete wrt
                      Miller patterns *)
                 default ()
-              | UnifFailure (_, CannotSolveConstraint _) as x ->
-                x
               | x -> x)
           | _, Evar ev when Evd.is_undefined evd (fst ev) && is_evar_allowed flags (fst ev) ->
             (match solve_simple_eqn (conv_fun evar_conv_x) flags env evd
@@ -711,20 +705,14 @@ let rec evar_conv_x flags env evd pbty term1 term2 =
                    NotClean: pruning in solve_simple_eqn is incomplete wrt
                      Miller patterns *)
                 default ()
-              | UnifFailure (_, CannotSolveConstraint _) as x ->
-                x
               | x -> x)
           | _ -> default ()
         end
-  in
-  let () = debug_unification (fun () -> Pp.(v 0 (str "end evar_conv_x " ++ int t ++ str " with " ++ str (match r with Success _ -> "success" | _ -> "failure") ++ cut ()))) in
-  r
 
 and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
     hds (* Copy of the never-reduced appr1 and appr2 *)
     lastUnfolded (* tells which side was last unfolded, if any *)
     (term1, sk1 as appr1) (term2, sk2 as appr2) =
-  let t = Random.int 1073741823 in
   let quick_fail i = (* not costly, loses info *)
     UnifFailure (i, NotSameHead)
   in
@@ -808,8 +796,7 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
   let consume_stack l2r (termF,skF) (termO,skO) evd =
     let switch f a b = if l2r then f a b else f b a in
     let not_only_app = Stack.not_purely_applicative skO in
-    let r = (ise_stack2 not_only_app env evd (evar_conv_x flags)) in
-    match switch r skF skO with
+    match switch (ise_stack2 not_only_app env evd (evar_conv_x flags)) skF skO with
     | Some (l,r), Success i' when l2r && (not_only_app || List.is_empty l) ->
         (* E[?n]=E'[redex] reduces to either l[?n]=r[redex] with
            case/fix/proj in E' (why?) or ?n=r[redex] *)
@@ -818,8 +805,7 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
         (* E'[redex]=E[?n] reduces to either r[redex]=l[?n] with
            case/fix/proj in E' (why?) or r[redex]=?n *)
         switch (evar_conv_x flags env i' pbty) (Stack.zip evd (termF,l)) (Stack.zip evd (termO,r))
-    | None, Success i' ->
-        switch (evar_conv_x flags env i' pbty) termF termO
+    | None, Success i' -> switch (evar_conv_x flags env i' pbty) termF termO
     | _, (UnifFailure _ as x) -> x
     | Some _, _ -> UnifFailure (evd,NotSameArgSize) in
   let eta_lambda env evd onleft term (term',sk') =
@@ -945,8 +931,7 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
       match EConstr.kind evd termR with
       | Lambda _ when (* if ever problem is ill-typed: *) List.is_empty skR ->
          eta_lambda env evd false termR apprF
-      | Construct u ->
-          eta_constructor flags env evd u skR apprF
+      | Construct u -> eta_constructor flags env evd u skR apprF
       | _ -> UnifFailure (evd,NotSameHead)
     in
     let tc evd =
@@ -954,7 +939,6 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
       try let evd = get_tc evd e in
         let apprF = whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd apprF in
         let apprR = whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd apprR in
-        let () = debug_unification Pp.(fun () -> int t ++ str " get_tc succeeds with " ++ pr_state env evd apprF ++ cut ()) in
         evar_eqappr_x flags env evd pbty hds lastUnfolded apprF apprR
       with _ -> quick_fail evd in
     match Stack.list_of_app_stack skF with
@@ -1045,11 +1029,10 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
     | _, _ -> anomaly (Pp.str "Unexpected result from ise_stack2.")
   in
   let app_empty = match sk1, sk2 with [], [] -> true | _ -> false in
-  let () = debug_unification (fun () -> Pp.(v 0 (int t ++ str " " ++ pr_state env evd appr1 ++ cut () ++ pr_state env evd appr2 ++ cut ()))) in
+  let () = debug_unification (fun () -> Pp.(v 0 (pr_state env evd appr1 ++ cut () ++ pr_state env evd appr2 ++ cut ()))) in
   match (flex_kind_of_term flags env evd term1 sk1,
          flex_kind_of_term flags env evd term2 sk2) with
     | Flexible (sp1,al1), Flexible (sp2,al2) ->
-      let () = debug_unification Pp.(fun () -> int t ++ str " both sides are flexible") in
       (* Notations:
          - "sk" is a stack (or, more abstractly, an evaluation context, written E)
          - "ev" is an evar "?ev", more precisely an evar ?n with an instance inst
@@ -1088,7 +1071,6 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
           | Success _ as x -> x
           | UnifFailure _ -> quick_fail i
         and f6 i =
-          let () = debug_unification Pp.(fun () -> int t ++ str " get_tc with both sides flexible") in
           try let evd = get_tc evd sp2 in
             evar_eqappr_x flags env evd pbty hds lastUnfolded
               (whd_betaiota_deltazeta_for_iota_state flags.open_ts env evd appr1)
@@ -1103,15 +1085,12 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
         ise_try evd [f1; f2; f3; f4; f5; f6]
 
     | Flexible ev1, MaybeFlexible v2 ->
-      let () = debug_unification Pp.(fun () -> int t ++ str " flex maybeflex") in
       flex_maybeflex true ev1 appr1 appr2 v2
 
     | MaybeFlexible vsk1, Flexible ev2 ->
-      let () = debug_unification Pp.(fun () -> int t ++ str " maybeflex flex") in
       flex_maybeflex false ev2 appr2 appr1 vsk1
 
     | MaybeFlexible (v1', sk1' as vsk1'), MaybeFlexible (v2', sk2' as vsk2') -> begin
-        let () = debug_unification Pp.(fun () -> int t ++ str " maybeflex maybeflex") in
         match EConstr.kind evd term1, EConstr.kind evd term2 with
         | LetIn (na1,b1,t1,c'1), LetIn (na2,b2,t2,c'2) ->
         let f1 i = (* FO *)
@@ -1230,7 +1209,6 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
     end
 
     | Rigid, Rigid when EConstr.isLambda evd term1 && EConstr.isLambda evd term2 ->
-        let () = debug_unification Pp.(fun () -> int t ++ str " rigid rigid") in
         let (na1,c1,c'1) = EConstr.destLambda evd term1 in
         let (na2,c2,c'2) = EConstr.destLambda evd term2 in
         ise_and evd
@@ -1242,15 +1220,10 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
            (* When in modulo_betaiota = false case, lambda's are not reduced *)
            (fun i -> exact_ise_stack2 env i (evar_conv_x flags) sk1 sk2)]
 
-    | Flexible ev1, Rigid ->
-        let () = debug_unification Pp.(fun () -> int t ++ str " flex rigid") in
-        flex_rigid true ev1 appr1 appr2
-    | Rigid, Flexible ev2 ->
-        let () = debug_unification Pp.(fun () -> int t ++ str " rigid flex") in
-        flex_rigid false ev2 appr2 appr1
+    | Flexible ev1, Rigid -> flex_rigid true ev1 appr1 appr2
+    | Rigid, Flexible ev2 -> flex_rigid false ev2 appr2 appr1
 
     | MaybeFlexible vsk1', Rigid ->
-        let () = debug_unification Pp.(fun () -> int t ++ str " maybeflex rigid") in
         let f3 i =
            if (not flags.with_cs) || lastUnfolded = Some true then UnifFailure (i,NoCanonicalStructure)
            else
@@ -1267,7 +1240,6 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
           ise_try evd [f3; f4]
 
     | Rigid, MaybeFlexible vsk2' ->
-        let () = debug_unification Pp.(fun () -> int t ++ str " rigid maybeflex") in
         let f3 i =
            if (not flags.with_cs) || lastUnfolded = Some false then UnifFailure (i,NoCanonicalStructure)
            else
@@ -1290,7 +1262,6 @@ and evar_eqappr_x ?(rhs_is_already_stuck = false) flags env evd pbty
         eta_lambda env evd false term2 (term1,sk1)
 
     | Rigid, Rigid -> begin
-        let () = debug_unification Pp.(fun () -> int t ++ str " rigid rigid") in
         match EConstr.kind evd term1, EConstr.kind evd term2 with
 
         | Sort s1, Sort s2 when app_empty ->
@@ -1463,7 +1434,6 @@ and conv_record flags env (evd,(h,h2),c,bs,(params,params1),(us,us2),(sk1,sk2),c
     in
     let app = mkApp (c, Array.rev_of_list ks) in
     let unif_params =
-      let () = debug_unification (fun () -> Pp.(v 0 (str "unif_params" ++ cut ()))) in
       match params1 with
       | None -> []
       | Some params1 ->
@@ -1473,34 +1443,25 @@ and conv_record flags env (evd,(h,h2),c,bs,(params,params1),(us,us2),(sk1,sk2),c
             params1 params)] in
     ise_and evd' (
         unif_params @
-       [(fun i ->
-         ise_list2 i
-           (fun i' u1 u ->
-             evar_conv_x flags env i' CONV u1 (substl ks u))
+       [(fun i -> ise_list2 i
+           (fun i' u1 u -> evar_conv_x flags env i' CONV u1 (substl ks u))
            us2 us);
-       (fun i ->
-         evar_conv_x flags env i CONV c1 app);
-       (fun i ->
-         exact_ise_stack2 env i (evar_conv_x flags) sk1 sk2);
+       (fun i -> evar_conv_x flags env i CONV c1 app);
+       (fun i -> exact_ise_stack2 env i (evar_conv_x flags) sk1 sk2);
        test;
-       (fun i ->
-         evar_conv_x flags env i CONV h2
+       (fun i -> evar_conv_x flags env i CONV h2
          (fst (decompose_app i (substl ks h))))])
   else UnifFailure(evd,(*dummy*)NotSameHead)
 
 and eta_constructor flags env evd ((ind, i), u) sk1 (term2,sk2) =
-  let () = debug_unification (fun () -> Pp.(v 0 (str "eta_constructor" ++ cut ()))) in
   (* reduces an equation <Construct(ind,i)|sk1> == <term2|sk2> to the
      equations [arg_i = Proj_i (sk2[term2])] where [sk1] is [params args] *)
   let open Declarations in
   let mib = lookup_mind (fst ind) env in
   if mib.mind_finite <> BiFinite then
-    let () = debug_unification (fun () -> Pp.(v 0 (str "inductive is not BiFinite" ++ cut ()))) in
     UnifFailure (evd,NotSameHead) else
   match Stack.list_of_app_stack sk1 with
-  | None ->
-    let () = debug_unification (fun () -> Pp.(v 0 (str "stack is not applicative" ++ cut ()))) in
-    UnifFailure (evd,NotSameHead)
+  | None -> UnifFailure (evd,NotSameHead)
   | Some l1 -> begin
     match get_projections env ind with
     | Some projs ->
@@ -1532,28 +1493,25 @@ and eta_constructor flags env evd ((ind, i), u) sk1 (term2,sk2) =
             s.projections in
         let f i t1 t2 = evar_conv_x { flags with with_cs = false } env i CONV t1 t2 in
         ise_list2 evd f l1' l2'
-       with
-       | _ ->
-        let () = debug_unification (fun () -> Pp.(v 0 (str "stack is not applicative" ++ cut ()))) in
-           UnifFailure(evd,NotSameHead))
+       with  _ -> UnifFailure(evd,NotSameHead))
   end
 
 let evar_conv_x flags env evd pbty term1 term2 =
-  (*debug_unification Pp.(fun () ->
+  debug_unification Pp.(fun () ->
       str "Starting unification:" ++ spc() ++
       Termops.Internal.print_constr_env env evd term1 ++
       (match pbty with CONV -> strbrk " =~= " | CUMUL -> strbrk " <~= ") ++
-      Termops.Internal.print_constr_env env evd term2);*)
+      Termops.Internal.print_constr_env env evd term2);
   let res =
     evar_conv_x flags env evd pbty term1 term2
   in
-  (*let () = debug_unification Pp.(fun () ->
+  let () = debug_unification Pp.(fun () ->
       let success = match res with
         | Success _ -> "success"
         | UnifFailure _ -> "failure"
       in
       str "Leaving unification with " ++ str success)
-  in*)
+  in
   res
 
 let evar_unify = conv_fun evar_conv_x
@@ -1774,7 +1732,6 @@ let second_order_matching flags env_rhs evd (evk,args) (test,argoccs) rhs =
   if not (noccur_evar env_rhs evd evk rhs) then raise (TypingFailed evd);
   (* Ensure that any progress made by Typing.e_solve_evars will not contradict
       the solution we are trying to build here by adding the problem as a constraint. *)
-  let () = debug_unification (fun () -> Pp.(v 0 (str "postpone in 2nd order matching" ++ cut ()))) in
   let evd = Evarutil.add_unification_pb (CONV,env_rhs,mkLEvar evd (evk, args),rhs) evd in
   let prc env evd c = Termops.Internal.print_constr_env env evd c in
   let rec make_subst i = function
@@ -2150,7 +2107,6 @@ exception UnableToUnify of evar_map * unification_error
 
 let evar_conv_x flags env evd pb x1 x2 : unification_result =
   NewProfile.profile "unification" (fun () ->
-      let () = debug_unification (fun () -> Pp.(v 0 (str "toplevel evar_conv_x: " ++ cut ()))) in
       evar_conv_x flags env evd pb x1 x2)
     ()
 

@@ -15,8 +15,6 @@ open Constr
 open Libobject
 open Globnames
 
-let debug_keys = CDebug.create ~name:"keys" ()
-
 type key =
   | KGlob of GlobRef.t
   | KLam
@@ -66,23 +64,6 @@ module KeyOrdered = struct
     | k, k' -> k == k'
 end
 
-let pr_key pr_global k =
-  let open Pp in
-  match k with
-  | KGlob gr -> pr_global gr
-  | KLam -> str"Lambda"
-  | KLet -> str"Let"
-  | KProd -> str"Product"
-  | KSort -> str"Sort"
-  | KCase -> str"Case"
-  | KFix -> str"Fix"
-  | KCoFix -> str"CoFix"
-  | KRel -> str"Rel"
-  | KInt -> str"Int"
-  | KFloat -> str"Float"
-  | KString -> str"String"
-  | KArray -> str"Array"
-
 module Keymap = HMap.Make(KeyOrdered)
 
 (* Mapping structure for references to be considered equivalent *)
@@ -90,20 +71,15 @@ module Keymap = HMap.Make(KeyOrdered)
 let keys = Summary.ref Keymap.empty ~name:"Keys_decl"
 
 let add_kv k ki v vi m =
-  try Keymap.modify k (fun k' -> Keymap.add v (ki, vi)) m
-  with Not_found -> Keymap.add k (Keymap.singleton v (ki, vi)) m
+  Keymap.update k (Option.cata (fun m -> Some (Keymap.add v (ki, vi) m)) (Some (Keymap.singleton v (ki, vi)))) m
 
 let add_keys k ki v vi =
   keys := add_kv k ki v vi (add_kv v vi k ki !keys)
 
 let equiv_keys k k' =
   if k == k' || KeyOrdered.equal k k' then Some ((0, 0)) else
-  try let r = Some (Keymap.find k' (Keymap.find k !keys)) in
-    let () = debug_keys (fun () -> Pp.(v 0 (pr_key Names.GlobRef.print k ++ str " = " ++ pr_key Names.GlobRef.print k' ++ cut ()))) in
-    r
-  with Not_found ->
-    let () = debug_keys (fun () -> Pp.(v 0 (pr_key Names.GlobRef.print k ++ str " != " ++ pr_key Names.GlobRef.print k' ++ cut ()))) in
-    None
+  try Some (Keymap.find k' (Keymap.find k !keys))
+  with Not_found -> None
 
 let mkKGlob env gr = KGlob (Environ.QGlobRef.canonize env gr)
 
@@ -172,6 +148,23 @@ let constr_key env kind c =
   with Not_found -> None
 
 open Pp
+
+let pr_key pr_global k =
+  let open Pp in
+  match k with
+  | KGlob gr -> pr_global gr
+  | KLam -> str"Lambda"
+  | KLet -> str"Let"
+  | KProd -> str"Product"
+  | KSort -> str"Sort"
+  | KCase -> str"Case"
+  | KFix -> str"Fix"
+  | KCoFix -> str"CoFix"
+  | KRel -> str"Rel"
+  | KInt -> str"Int"
+  | KFloat -> str"Float"
+  | KString -> str"String"
+  | KArray -> str"Array"
 
 let pr_keyset pr_global v =
   prlist_with_sep spc (fun (k, (i, i')) -> pr_key pr_global k ++ str "(" ++ int i ++ str ", " ++ int i' ++ str ")") (Keymap.bindings v)
